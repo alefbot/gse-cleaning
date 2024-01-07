@@ -5,17 +5,20 @@ import json
 import logging
 import os
 import re
+import traceback
 from urllib.parse import quote
 
 import aiohttp
 import langdetect
 import zstandard as zstd
-import async_timeout
 from newspaper import Article
 from zstandard import ZstdError
 
 MAX_RETRIES = 2
-ARCHIVER_ADDRESS = os.getenv("ARCHIVER_ADDRESS")
+NUM_PROCESSES = 5
+semaphore = asyncio.Semaphore(NUM_PROCESSES)
+# ARCHIVER_ADDRESS = os.getenv("ARCHIVER_ADDRESS")
+ARCHIVER_ADDRESS = "https://graph-api-archiver.pr.mci.dev/archiver/search"
 LOG_FILENAME = "file.log"
 logging.basicConfig(
     format="%(asctime)s,%(msecs)d %(levelname)s %(message)s",
@@ -63,7 +66,7 @@ def extract_text(url, html):
     article.parse()
     if len(article.text) < 1000:
         return 
-    text = re.sub(r"\n{2,}", "\n{2}", article.text)
+    text = re.sub(r"\n{2,}", "\n\n", article.text)
     return text
 
 
@@ -84,9 +87,11 @@ def decompress_zst_file(input_filename, output_filename=None):
 
 async def send_urls(session, **kwargs):
     async def send_url(**kwargs):
-        data = {"url": kwargs['url']}
-        headers = {'Content-type': 'application/json'}
-        async with async_timeout.timeout(10):
+        async with semaphore:
+            await asyncio.sleep(0.1) 
+            data = {"url": kwargs['url']}
+            headers = {'Content-type': 'application/json'}
+            # async with async_timeout.timeout(5):
             try:
                 async with session.post(ARCHIVER_ADDRESS, headers=headers, data=json.dumps(data)) as response:
                     if response.status == 200:
@@ -97,17 +102,17 @@ async def send_urls(session, **kwargs):
                             try:
                                 assert text_language(text) == 'fa'
                                 save_text(text=text, file_path=kwargs['file_path'], url=kwargs['url'])
-                                logging.info(f"Response text for {kwargs['url']}: {text}")  
+                                logging.info(f"Response text for {kwargs['url']}")  
                             except:
                                 logging.info(f"Response text for {kwargs['url']} was not FARSI")
                     else:
                         logging.error(f"Error sending URL {kwargs['url']}: Status {response.status}") 
             except asyncio.TimeoutError:
                 logging.error(f"Timeout error for URL {kwargs['url']}") 
-                save_text(file_path=kwargs['file_path'], url=kwargs['url'])
+                save_text(file_path=os.path.join(os.path.dirname(kwargs['file_path']), f"timeout_{kwargs['file_path']}.jsonl"), url=kwargs['url'])
             except Exception as e:
-                logging.error(f"Unexpected error for URL {kwargs['url']}: {e}") 
-
+                logging.error(f"Unexpected error for URL {kwargs['url']}: {traceback.format_exc()}") 
+            
     tasks = [asyncio.create_task(send_url(url=url, file_path=kwargs['file_path'])) for url in kwargs['urls'] if filter_url(url) != None]
     await asyncio.gather(*tasks)
 
@@ -128,5 +133,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     os.makedirs('gse-text-data', exist_ok=True)
     urls = decompress_zst_file(args.file_path)
-    save_file_path = f'gse-text-data/{re.sub("z8.zst", "txt", os.path.basename(args.file_path))}'
+    save_file_path = f'gse-text-data/{re.sub("z8.zst", "jsonl", os.path.basename(args.file_path))}'
     asyncio.run(receive_html(urls=urls, file_path=save_file_path))

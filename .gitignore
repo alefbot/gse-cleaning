@@ -165,3 +165,4 @@ data/test/
 *_output/
 .filebeat/*.yml
 secret.toml
+gse-text-data/*
