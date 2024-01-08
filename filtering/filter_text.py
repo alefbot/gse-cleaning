@@ -13,6 +13,7 @@ import unicodedata
 from glob import glob
 import multiprocessing as mp
 import time
+import collections
 from itertools import groupby
 from string import punctuation
 from functools import partial
@@ -30,7 +31,7 @@ from tqdm import tqdm
 
 from normalize import Normalizer
 from config import config
-from regex_template import *
+from patterns import Patterns
  
 #TODO: remove CSS and Javascript
 # from collection.abs import sequence. didn't still contributed in parsivar normalizer
@@ -115,7 +116,7 @@ def remove_news_tags(txt):
 # urls not important? because are english?
 def replace_urls(txt):
     # remove urls?
-    normalized_txt = re.sub(URL_REGEX, "", txt)
+    normalized_txt = re.sub(Patterns.URL_REGEX, "", txt)
     return normalized_txt
 
 
@@ -124,7 +125,7 @@ def replace_usernames(txt):
     for _ in range(occ):
         txt = txt.replace('@<user>', "")
         # replace other user handles by filler
-        txt = re.sub(USERNAME, "", txt)
+        txt = re.sub(Patterns.USERNAME, "", txt)
         # add spaces between, and remove double spaces again
         # e = e.replace(filler, f' {filler} ')
         txt = ' '.join(txt.split())
@@ -155,13 +156,13 @@ def remove_unicode(txt):
 
 def replace_phone_numbers(txt):
     # e = re.sub(r"", "", e)
-    normalized_txt = re.sub(IRAN_PHONE_NUMBER, "", txt)
+    normalized_txt = re.sub(Patterns.IRAN_PHONE_NUMBER, "", txt)
     return normalized_txt
 
 
 # from mj: as naser, I think should even consider
 def remove_currency_symbols(txt):
-    normalized_txt = re.sub(CURRENCY_SYMBOLS, "", txt)
+    normalized_txt = re.sub(Patterns.CURRENCY_SYMBOLS, "", txt)
     return normalized_txt
 
 
@@ -172,7 +173,7 @@ def remove_wierd_unicode(txt):
 
 
 def remove_unwanted_ascii(txt):
-    normalized_txt = re.sub(UNWANTED_ASCII, "", txt)
+    normalized_txt = re.sub(Patterns.UNWANTED_ASCII, "", txt)
     return normalized_txt
 
 
@@ -188,69 +189,165 @@ def normalize_parsivar(txt):
 
 
 def remove_quote(txt):
-    normalized_txt = re.sub(PERSIAN_QUOTE, "", txt)
+    normalized_txt = re.sub(Patterns.PERSIAN_QUOTE, "", txt)
     return normalized_txt
 
 
 def youtube_tags(txt):
-    normalized_txt = re.sub(YOUTUBE_TAG, " ", txt)
+    normalized_txt = re.sub(Patterns.YOUTUBE_TAG, " ", txt)
     return normalized_txt 
 
 
 def remove_citation(txt):
-    normalized_text = re.sub(CITATION, "", txt)
+    normalized_text = re.sub(Patterns.CITATION, "", txt)
     return normalized_text
 
 
 def start_with_number(txt):
-    normalized_txt = re.sub(START_WITH_NUMBER, "", txt)
+    normalized_txt = re.sub(Patterns.START_WITH_NUMBER, "", txt)
     return normalized_txt
+
+# here we should use filter rather than map
+def remove_documents_by_word_length(txt):
+    lines = txt.split("\n")
+    words = sum([line.split() for line in lines], [])  # Split text into words
+
+    word_lengths = [len(word) for word in words]  # Get lengths of all words
+    mean_word_length = sum(word_lengths) / len(word_lengths)  # Calculate mean word length
+
+    if not 3 <= mean_word_length <= 10:  # Check if mean word length is outside the range
+        return False
+    return True
+
+
+def remove_documents_by_symbol_ratio(txt):
+    words = txt.split()
+
+    hash_count = txt.count("#")
+    ellipsis_count = txt.count("...")
+
+    if not words:  # Handle empty documents
+        return False
+
+    hash_ratio = hash_count / len(words)
+    ellipsis_ratio = ellipsis_count / len(words)
+
+    if hash_ratio > 0.1 or ellipsis_ratio > 0.1:
+        return False
+    return True
+
+# here we should use filter rather than map
+def remove_documents_bullet_point_ellipsis(txt):
+    lines = txt.split("\n")
+    bullet_count = 0
+    ellipsis_count = 0
+    total_lines = len(lines)
+
+    for line in lines:
+        if line.strip().startswith("- ") or line.strip().startswith("\u2022"):  # Check for bullet point
+            bullet_count += 1
+        if line.strip().endswith("..."):  # Check for ellipsis
+            ellipsis_count += 1
+
+    if (bullet_count / total_lines) > 0.9 or (ellipsis_count / total_lines) > 0.3:
+        return False
+    return True
+
+
+def filter_documents_by_alphabetic_words(txt):
+    words = txt.split()
+
+    alphabetic_word_count = 0
+    total_word_count = len(words)
+
+    for word in words:
+        if any(char.isalpha() for char in word):  # Check if word contains at least one alphabetic character
+            alphabetic_word_count += 1
+
+    alphabetic_word_ratio = alphabetic_word_count / total_word_count
+
+    if alphabetic_word_ratio < 0.8:
+        return False
+    return True
+
+
+def filter_documents_by_line_repetition(txt, threshold=0.3):
+    
+    txt_normalized = re.sub("\n\n", "\n", txt)
+    lines = txt_normalized.split("\n")
+
+    unique_lines = set(lines)  # Remove duplicates
+    duplicate_count = len(lines) - len(unique_lines)
+    duplicate_fraction = duplicate_count / len(lines)
+
+    if duplicate_fraction > threshold:
+        return False
+    return True
+
+
+def filter_documents_by_paragraph_repetition(txt, threshold=0.3):
+
+    paragraphs = txt.split("\n\n")  # Split text into paragraphs
+
+    unique_paragraphs = set(paragraphs)
+    duplicate_count = len(paragraphs) - len(unique_paragraphs)
+    duplicate_fraction = duplicate_count / len(paragraphs)
+
+    if duplicate_fraction > threshold:
+        return False
+    return True
+
+
+def filter_line_character_fraction(txt, threshold=.2):
+    normalized_txt = re.sub("\n\n", "\n", txt)
+    lines = normalized_txt.split("\n")
+    for line in lines:
         
 
 def remove_reference(txt, mod="delete"):
-    reference_match = re.search(PERSIAN_REFERENCE, txt)
+    reference_match = re.search(Patterns.PERSIAN_REFERENCE, txt)
     if reference_match:
         if 0 == reference_match.start():
             if mod == "delete":  
                 return ""
             elif mod == "replace":
-                normalized_text = re.sub(PERSIAN_REFERENCE, "", txt)
+                normalized_text = re.sub(Patterns.PERSIAN_REFERENCE, "", txt)
                 return normalized_text
     return txt
             
             
 def remove_read_more(txt, mod="delete"):
-    persian_read_more_match = re.search(PERSIAN_READ_MORE, txt)
+    persian_read_more_match = re.search(Patterns.PERSIAN_READ_MORE, txt)
     if persian_read_more_match:
         if persian_read_more_match.end() == len(txt.strip()):
             if mod == "delete":
                 return ""
             elif mod == "replace":
-                normalized_text = re.sub(PERSIAN_READ_MORE, "", txt)
+                normalized_text = re.sub(Patterns.PERSIAN_READ_MORE, "", txt)
                 return normalized_text
     return txt
 
 
 def remove_sign_in(txt, mod="delete"):
-    persian_sign_in = re.search(PERSIAN_SIGN_IN, txt)
+    persian_sign_in = re.search(Patterns.PERSIAN_SIGN_IN, txt)
     if persian_sign_in:
         if persian_sign_in.end() == len(txt.strip()):
             if mod == "delete":
                 return ""
             elif mod == "replace":
-                normalized_text = re.sub(PERSIAN_SIGN_IN, "", txt)
+                normalized_text = re.sub(Patterns.PERSIAN_SIGN_IN, "", txt)
                 return normalized_text
     return txt
 
 
 def remove_click(txt, mod="delete"):
-    persian_sign_in = re.search(PERSIAN_CLICK, txt)
+    persian_sign_in = re.search(Patterns.PERSIAN_CLICK, txt)
     if persian_sign_in:
         if persian_sign_in.end() == len(txt.strip()):
             if mod == "delete":
                 return ""
             elif mod == "replace":
-                normalized_text = re.sub(PERSIAN_CLICK, "", txt)
+                normalized_text = re.sub(Patterns.PERSIAN_CLICK, "", txt)
                 return normalized_text
     return txt
 

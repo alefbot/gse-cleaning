@@ -15,4 +15,7 @@ class Patterns:
     IRAN_PHONE_NUMBER = r'((\+|00)98|0)\d{10}'
     CITATION = r'\[\d\]'
     START_WITH_NUMBER = r'[^\d\s]+'
-    word_counters = r"(^|\s)\d+\.?\s"
+    COUNTERS = r"(^|\s)\d+\.?\s"
+    NON_SYMBOL = r"[^\w\s\d]"
+    
+    
