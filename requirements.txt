@@ -1,0 +1,4 @@
+newspaper3k==0.2.8
+warcio==1.7.4
+tokenizers==0.15.0
+datasets==2.15.0

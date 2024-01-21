@@ -6,6 +6,8 @@ import logging
 import os
 import re
 import traceback
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 from urllib.parse import quote
 
 import aiohttp
@@ -13,11 +15,11 @@ import langdetect
 import zstandard as zstd
 from newspaper import Article
 from zstandard import ZstdError
-from pathlib import Path
 
 MAX_RETRIES = 2
 NUM_PROCESSES = 20
-semaphore = asyncio.Semaphore(NUM_PROCESSES)
+FILE_PATH_204 = 'gse-text-data/urls_with_204'
+MAIN_FILE_PATH = 'gse-text-data/main_files'
 # ARCHIVER_ADDRESS = os.getenv("ARCHIVER_ADDRESS")
 ARCHIVER_ADDRESS = "https://graph-api-archiver.pr.mci.dev/archiver/search"
 LOG_FILENAME = "file.log"
@@ -88,44 +90,47 @@ def decompress_zst_file(input_filename, output_filename=None):
 
 async def send_urls(session, **kwargs):
     async def send_url(**kwargs):
-        async with semaphore:
-            await asyncio.sleep(0.01) 
-            data = {"url": kwargs['url']}
-            headers = {'Content-type': 'application/json'}
-            # async with async_timeout.timeout(5):
-            try:
-                async with session.post(ARCHIVER_ADDRESS, headers=headers, data=json.dumps(data)) as response:
-                    max_retries = 2  # Set the maximum number of retries
-                    retry_count = 0
 
-                    while response.status != 200 and retry_count < max_retries:
-                        retry_count += 1
-                        logging.info(f"Retrying request for {kwargs['url']} (attempt {retry_count}/{max_retries})")
-                        # await asyncio.sleep(1)  # Optional delay between retries
-                        data = {"url": modify_url(kwargs['url'])}
-                        response = await session.post(ARCHIVER_ADDRESS, headers=headers, data=json.dumps(data))
-                        
-                    if response.status == 200:
-                        response_ = await response.read()
-                        html = base64.b64decode(json.loads(response_)['result']['rawHtml'])
-                        text = extract_text(kwargs['url'], html)
-                        if text != "":                            
-                            if text_language(text) == 'fa':
-                                save_text(text=text, file_path=kwargs['file_path'], url=kwargs['url'])
-                                logging.info(f"Response text for {kwargs['url']}")  
-                            else:
-                                logging.info(f"Response text for {kwargs['url']} is not FARSI")
+        await asyncio.sleep(0.01) 
+        data = {"url": kwargs['url']}
+        headers = {'Content-type': 'application/json'}
+        # async with async_timeout.timeout(5):
+        try:
+            async with session.post(ARCHIVER_ADDRESS, headers=headers, data=json.dumps(data)) as response:
+                max_retries = 2  # Set the maximum number of retries
+                retry_count = 0
+
+                while response.status != 200 and retry_count < max_retries:
+                    retry_count += 1
+                    logging.info(f"Retrying request for {kwargs['url']} (attempt {retry_count}/{max_retries})")
+                    # await asyncio.sleep(1)  # Optional delay between retries
+                    data = {"url": modify_url(kwargs['url'])}
+                    response = await session.post(ARCHIVER_ADDRESS, headers=headers, data=json.dumps(data))
+                    
+                if response.status == 200:
+                    response_ = await response.read()
+                    html = base64.b64decode(json.loads(response_)['result']['rawHtml'])
+                    text = extract_text(kwargs['url'], html)
+                    if text != "":                            
+                        if text_language(text) == 'fa':
+                            save_text(text=text, file_path=kwargs['file_path'], url=kwargs['url'])
+                            logging.info(f"Response text for {kwargs['url']}")  
                         else:
-                            logging.info(f"Response text for {kwargs['url']} is None")
+                            logging.info(f"Response text for is not FARSI")
                     else:
-                        logging.error(f"Error sending URL {kwargs['url']}: Status {response.status}") 
-            except asyncio.TimeoutError:
-                logging.error(f"Timeout error for URL {kwargs['url']}") 
-                save_text(file_path=os.path.join(os.path.dirname(kwargs['file_path']), f"timeout_{kwargs['file_path']}.jsonl"), url=kwargs['url'])
-            except Exception as e:
-                logging.error(f"Unexpected error for URL {kwargs['url']}: {traceback.format_exc()}") 
+                        logging.info(f"Response text for is None")
+                elif response.status == 204:
+                    logging.error(f"Error sending URL Status {response.status}")
+                    save_text(url=kwargs['url'], file_path=kwargs['file_path_204'])
+                else:
+                    logging.error(f"Error sending URL Status {response.status}") 
+        except asyncio.TimeoutError:
+            logging.error(f"Timeout error for URL {kwargs['url']}") 
+        except Exception as e:
+            logging.error(f"Unexpected error for URL {kwargs['url']}: {traceback.format_exc()}") 
             
-    tasks = [asyncio.create_task(send_url(url=url, file_path=kwargs['file_path'])) for url in kwargs['urls'] if filter_url(url) != ""]
+    executor = ProcessPoolExecutor(NUM_PROCESSES)
+    tasks = [asyncio.create_task(send_url(url=url, file_path=kwargs['file_path'])).set_executor(executor) for url in kwargs['urls'] if filter_url(url) != ""]
     await asyncio.gather(*tasks)
 
 
@@ -143,11 +148,16 @@ if __name__ == "__main__":
                     )
     parser.add_argument("--file_path", "-f", help="the .zstd file should be added to this folder", required=True)
     args = parser.parse_args()
-    os.makedirs('gse-text-data', exist_ok=True)
-    save_file_path = f'gse-text-data/{re.sub("z8.zst", "jsonl", os.path.basename(args.file_path))}'
+    os.makedirs(MAIN_FILE_PATH, exist_ok=True)
+    os.makedirs(FILE_PATH_204, exist_ok=True)
+    save_file_path = f'{MAIN_FILE_PATH}/{re.sub("z8.zst", "jsonl", os.path.basename(args.file_path))}'
+    file_path_204 = f'{FILE_PATH_204}/{re.sub("z8.zst", "jsonl", os.path.basename(args.file_path))}'
     urls = decompress_zst_file(args.file_path)
     if Path(save_file_path).is_file():
         seen_urls = [json.loads(_dict)['url'] for _dict in open(save_file_path, "r").readlines()]
         urls = set(urls) - set(seen_urls)
+    if Path(file_path_204).is_file():
+        urls_with_204_status_code = [json.loads(_dict)['url'] for _dict in open(file_path_204, "r").readlines()]
+        urls = set(urls) - set(urls_with_204_status_code)
     logging.info(f"number of all URLs {len(urls)}")
-    asyncio.run(receive_html(urls=urls, file_path=save_file_path))
+    asyncio.run(receive_html(urls=urls, file_path=save_file_path, file_path_204=file_path_204))

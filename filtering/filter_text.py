@@ -3,36 +3,22 @@ import argparse
 import concurrent
 import concurrent.futures
 import html
-import json
 import logging
 import logging.config
 import os
 import re
-import traceback
 import unicodedata
-from glob import glob
-import multiprocessing as mp
-import time
-import collections
+from collections import Counter
+from functools import reduce
 from itertools import groupby
 from string import punctuation
-from functools import partial
-from threading import Lock
-from unidecode import unidecode
-# from zarebin_normalizer.normalizer import Normalizer
 
 import datasets
 from datasets import load_dataset
-from fastcore.basics import listify
-from fastcore.utils import compose
+from patterns import Patterns
 from tokenizers import normalizers
 from tokenizers.normalizers import NFC, NFD, NFKC, NFKD
-from tqdm import tqdm
 
-from normalize import Normalizer
-from config import config
-from patterns import Patterns
- 
 #TODO: remove CSS and Javascript
 # from collection.abs import sequence. didn't still contributed in parsivar normalizer
 
@@ -43,7 +29,7 @@ logging.config.dictConfig(
     }
 )
 logging.basicConfig(
-    filename=config["logging"]["name"],
+    filename="temp",
     filemode="w",
     format="%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s",
     datefmt="%H:%M:%S",
@@ -56,12 +42,8 @@ datasets.logging.DEBUG
 INPUT_DIRECTORY = "/mnt/data/llm-data/src/preprocess/data/lang_detect/processed/"
 OUTPUT_DIRECTORY = "/mnt/data/llm-data/src/preprocess/data/string_cleaning_temp/"
 CHAR_NUMBER_RATIO = .6
-MIN_DOCUMEMTN_LENGTH = 25
+MIN_LINE_WORDS = 10
 
-
-normalizer = Normalizer(remove_punctuation=False, word_number_separation=False)
-# remove different kind of uincode
-# control_char_regex = re.compile(r'[\r\n\t]+')
 
 Unicode_normalizer = normalizers.Sequence([NFD(), NFKD(), NFC(), NFKC()])        
 
@@ -72,21 +54,6 @@ def fix_html(txt):
         '\\"', '"').replace('<unk>', ' ').replace(' @.@ ', '.').replace(' @-@ ', '-').replace('...', ' …')
     htmp_unscape = html.unescape(txt_normalized)
     return htmp_unscape
-
-
-def arabic_to_english_numbers(txt):
-    txt_normalized = re.sub(r'\d', lambda x: unidecode(x.group()), txt)
-    return txt_normalized
-
-
-def add_space_between_numbers(txt):
-    txt_normalized = re.sub(r'\d{2,}', lambda x: " ".join(x.group()), txt)
-    return txt_normalized
-
-
-def half_to_full_space(txt):
-    txt_normalized = re.sub('\u200c', " ", txt)
-    return txt_normalized
 
 
 # what is so category? symbol other means i think
@@ -101,41 +68,12 @@ def remove_unicode_symbols(txt):
 
 def standardise_punc(txt):
     transl_table = dict([(ord(x), ord(y))
-                         for x, y in zip(u"‘’´“”–-",  u"'''\"\"--")])
+                         for x, y in zip(u"‘’´“”–",  u"'''\"\"-")])
     txt_normalized = txt.translate(transl_table)
-    # e = re.sub(r"[^a-zA-Z0-9ÖÄÅöäå .,'%&€$=*@+;<>/()!?%:-]", " ", e)
-
     return txt_normalized
 
 
-def remove_news_tags(txt):
-    normalized_txt = re.sub(r"(<[A-Z].+?>)|(</[A-Z].+?>)", "", txt)
-    return normalized_txt
-
-
-# urls not important? because are english?
-def replace_urls(txt):
-    # remove urls?
-    normalized_txt = re.sub(Patterns.URL_REGEX, "", txt)
-    return normalized_txt
-
-
-def replace_usernames(txt):
-    occ = txt.count('@')
-    for _ in range(occ):
-        txt = txt.replace('@<user>', "")
-        # replace other user handles by filler
-        txt = re.sub(Patterns.USERNAME, "", txt)
-        # add spaces between, and remove double spaces again
-        # e = e.replace(filler, f' {filler} ')
-        txt = ' '.join(txt.split())
-
-    return txt
-
-
-def remove_duplicate_words_punctuation(txt):
-    # from mj: what is it doing?
-    txt = re.sub(r'\b(\w+)( \1\b)+', r'\1', txt)
+def remove_duplicate_punctuation(txt):
     punc = set(punctuation+"؟!،")
     newtext = []
     for k, g in groupby(txt):
@@ -154,13 +92,7 @@ def remove_unicode(txt):
     return normalized_txt
 
 
-def replace_phone_numbers(txt):
-    # e = re.sub(r"", "", e)
-    normalized_txt = re.sub(Patterns.IRAN_PHONE_NUMBER, "", txt)
-    return normalized_txt
-
-
-# from mj: as naser, I think should even consider
+# from mj: as naser said, I think should even consider
 def remove_currency_symbols(txt):
     normalized_txt = re.sub(Patterns.CURRENCY_SYMBOLS, "", txt)
     return normalized_txt
@@ -174,17 +106,6 @@ def remove_wierd_unicode(txt):
 
 def remove_unwanted_ascii(txt):
     normalized_txt = re.sub(Patterns.UNWANTED_ASCII, "", txt)
-    return normalized_txt
-
-
-# from mj: really remove them? even for llm? # can be added 
-def replace_char(txt):
-    normalized_txt = re.sub(r"\||_|-", " ", txt)
-    return normalized_txt 
-
-
-def normalize_parsivar(txt):
-    normalized_txt = normalizer.normalize_text(txt)
     return normalized_txt
 
 
@@ -203,10 +124,6 @@ def remove_citation(txt):
     return normalized_text
 
 
-def start_with_number(txt):
-    normalized_txt = re.sub(Patterns.START_WITH_NUMBER, "", txt)
-    return normalized_txt
-
 # here we should use filter rather than map
 def remove_documents_by_word_length(txt):
     lines = txt.split("\n")
@@ -215,7 +132,7 @@ def remove_documents_by_word_length(txt):
     word_lengths = [len(word) for word in words]  # Get lengths of all words
     mean_word_length = sum(word_lengths) / len(word_lengths)  # Calculate mean word length
 
-    if not 3 <= mean_word_length <= 10:  # Check if mean word length is outside the range
+    if not 2 <= mean_word_length <= 9:  # Check if mean word length is outside the range
         return False
     return True
 
@@ -238,6 +155,7 @@ def remove_documents_by_symbol_ratio(txt):
 
 # here we should use filter rather than map
 def remove_documents_bullet_point_ellipsis(txt):
+    txt = re.sub("\n\n", "\n", txt)
     lines = txt.split("\n")
     bullet_count = 0
     ellipsis_count = 0
@@ -286,90 +204,127 @@ def filter_documents_by_line_repetition(txt, threshold=0.3):
 
 
 def filter_documents_by_paragraph_repetition(txt, threshold=0.3):
-
     paragraphs = txt.split("\n\n")  # Split text into paragraphs
-
     unique_paragraphs = set(paragraphs)
     duplicate_count = len(paragraphs) - len(unique_paragraphs)
     duplicate_fraction = duplicate_count / len(paragraphs)
-
     if duplicate_fraction > threshold:
         return False
     return True
 
 
-def filter_line_character_fraction(txt, threshold=.2):
-    normalized_txt = re.sub("\n\n", "\n", txt)
-    lines = normalized_txt.split("\n")
-    for line in lines:
-        
+def calculate_line_duplicate_char_fractions(text, threshold=0.2):
+    # Calculate duplicate fractions for lines
+    text = re.sub("\n\n", "\n", text)
+    lines = text.split('\n')
+    unique_lines = set(lines)
+    if len(lines) > 0:
+        line_duplicate_char_fraction = 1 - sum(len(line) for line in unique_lines) / sum(len(line) for line in lines)
+    else:
+        line_duplicate_char_fraction = 0
+    
+    if line_duplicate_char_fraction > threshold:
+        return False
+    return True
 
-def remove_reference(txt, mod="delete"):
-    reference_match = re.search(Patterns.PERSIAN_REFERENCE, txt)
-    if reference_match:
-        if 0 == reference_match.start():
-            if mod == "delete":  
-                return ""
-            elif mod == "replace":
-                normalized_text = re.sub(Patterns.PERSIAN_REFERENCE, "", txt)
-                return normalized_text
-    return txt
+
+def calculate_paragraph_duplicate_char_fractions(text, threshold=0.2):
+    # Calculate duplicate fractions for paragraphs
+    paragraphs = text.split('\n\n')
+    unique_paragraphs = set(paragraphs)
+    if len(paragraphs) > 0:
+        paragraph_duplicate_char_fraction = 1 - sum(len(paragraph) for paragraph in unique_paragraphs) / sum(len(paragraph) for paragraph in paragraphs)
+    else:
+        paragraph_duplicate_char_fraction = 0    
+
+    if paragraph_duplicate_char_fraction > threshold:
+        return False
+    return True
+
+
+def generate_ngrams(text, n):
+    normalized_text = re.sub(r"\n+", " ", text.strip())
+    ngrams = [normalized_text[i:i+n] for i in range(len(normalized_text)-n+1)]
+    return ngrams
+
+
+def calculate_top_ngram_char_fraction(text, threshold=0.2):
+    for n in range(2, 5):
+        ngrams = generate_ngrams(text, n)
+        ngram_counts = Counter(ngrams)
+        most_common_ngram, most_common_count = ngram_counts.most_common(1)[0]
+        fraction = most_common_count * len(most_common_ngram) / len(text)
+        if fraction > threshold:
+            return False
+        threshold -= 0.02
+    return True
+
+
+def calculate_duplicated_ngram_char_fraction(text, threshold=0.15):
+    for n in range(5, 11):
+        ngrams = generate_ngrams(text, n)
+        ngram_counts = Counter(ngrams)
+        duplicate_n_gram_chars = set(n_gram for n_gram, count in ngram_counts.items() if count > 1)
+        unique_duplicate_n_gram_chars = set(char for n_gram in duplicate_n_gram_chars for char in n_gram)
+        fraction = len(unique_duplicate_n_gram_chars) / len(text)
+        if fraction > threshold:
+            return False
+        threshold -= 0.01
+    return True
+
+    
+def remove_reference(txt):
+    normalized_text = re.sub(Patterns.PERSIAN_REFERENCE, "", txt)
+    return normalized_text
             
             
-def remove_read_more(txt, mod="delete"):
-    persian_read_more_match = re.search(Patterns.PERSIAN_READ_MORE, txt)
-    if persian_read_more_match:
-        if persian_read_more_match.end() == len(txt.strip()):
-            if mod == "delete":
-                return ""
-            elif mod == "replace":
-                normalized_text = re.sub(Patterns.PERSIAN_READ_MORE, "", txt)
-                return normalized_text
-    return txt
+def remove_read_more(txt):
+    normalized_text = re.sub(Patterns.PERSIAN_READ_MORE, "", txt)
+    return normalized_text
 
 
-def remove_sign_in(txt, mod="delete"):
-    persian_sign_in = re.search(Patterns.PERSIAN_SIGN_IN, txt)
-    if persian_sign_in:
-        if persian_sign_in.end() == len(txt.strip()):
-            if mod == "delete":
-                return ""
-            elif mod == "replace":
-                normalized_text = re.sub(Patterns.PERSIAN_SIGN_IN, "", txt)
-                return normalized_text
-    return txt
+def remove_sign_in(txt):
+    normalized_text = re.sub(Patterns.PERSIAN_SIGN_IN, "", txt)
+    return normalized_text
 
 
-def remove_click(txt, mod="delete"):
-    persian_sign_in = re.search(Patterns.PERSIAN_CLICK, txt)
-    if persian_sign_in:
-        if persian_sign_in.end() == len(txt.strip()):
-            if mod == "delete":
-                return ""
-            elif mod == "replace":
-                normalized_text = re.sub(Patterns.PERSIAN_CLICK, "", txt)
-                return normalized_text
-    return txt
+def remove_click(txt):
+    normalized_text = re.sub(Patterns.PERSIAN_CLICK, "", txt)
+    return normalized_text
 
-        
-def process(examples):
+            
+def filter_and_process_valid_examples(examples):
+    
+    filtered_texts = [
+        reduce(lambda x, y: y(x), document_wise_filtering, example)
+        for example in examples
+        if all(filter_func(example) for filter_func in repetition_removal)
+    ]
+    
     tmp_lst = []
-    for example in listify(examples['text']):
+    for example in filtered_texts:
         main_lines = []
-        normalized_document = document_wise_filtering(example)
-        for line in normalized_document.split('\n'):
-            normalized_line = remove_click(line)
-            if len(line.split()) < MIN_DOCUMEMTN_LENGTH:
-                normalized_line = line_wise_filtering(normalized_line)
-                # adding extra \n is a good idea i think. here we have consecutive \n\n 
-                main_lines.append(normalized_line)
+        for line in example.strip().split('\n'):
+            if line.strip() != "":
+                words = line.split()
+                words_length = len(words)
+                if words_length <= 1 and words[0] != "":
+                    main_lines.append("")
+                elif words_length < MIN_LINE_WORDS:
+                    normalized_line = reduce(lambda x, y: y(x), document_wise_filtering, line)
+                    if len(normalized_line) <= 1:
+                        main_lines.append("")
+                    # adding extra \n is a good idea i think. here we have consecutive \n\n 
+                    else:
+                        main_lines.append(line)
+                else:
+                    main_lines.append(line)
             else:
-                main_lines.append(normalized_line)
+                main_lines.append("")
             
         tmp_lst.append("\n".join(main_lines))
-    
-    examples['text'] = tmp_lst
-    return examples
+
+    return {"text": tmp_lst}
     
 
 if __name__ == "__main__":
@@ -405,39 +360,40 @@ if __name__ == "__main__":
                         help="which column should be processed"
                         )
     args = parser.parse_args()
-    document_wise_filtering = compose(
+    repetition_removal = [
+    remove_documents_by_word_length,
+    remove_documents_by_symbol_ratio,
+    remove_documents_bullet_point_ellipsis,
+    filter_documents_by_alphabetic_words,
+    filter_documents_by_line_repetition,
+    filter_documents_by_paragraph_repetition,
+    calculate_line_duplicate_char_fractions,
+    calculate_paragraph_duplicate_char_fractions,
+    calculate_top_ngram_char_fraction,
+    calculate_duplicated_ngram_char_fraction
+    ]
+    
+    document_wise_filtering = [
         fix_html,
-        arabic_to_english_numbers,
-        half_to_full_space,
         remove_unicode_symbols,
         standardise_punc,
-        remove_news_tags,
-        replace_urls,
-        replace_usernames,
-        remove_duplicate_words_punctuation,
+        remove_duplicate_punctuation,
         remove_unicode,
-        replace_phone_numbers,
         remove_currency_symbols,
         remove_wierd_unicode,
         remove_unwanted_ascii,
-        replace_char,
-        normalize_parsivar,
-        remove_quote,
         youtube_tags,
         remove_citation,
-        start_with_number
-    )
+    ]
     
-    line_wise_filtering = compose(
+    line_wise_filtering = [
+        remove_click,
         remove_reference,
         remove_read_more,
         remove_sign_in,
-    )
+    ]
     
     os.makedirs(args.save_path, exist_ok=True)
-    # data_files = os.path.join(args.dataset_path, "*.json")
-    # path_json_files = glob(os.path.join(dataset_path, '**/*.json'), recursive=True)
-    # data_files = [os.path.join(dataset_path, "CC-MAIN-20230610233020-20230611023020-00771/*.json"), os.path.join(dataset_path, "CC-MAIN-20230610233020-20230611023020-00781/*.json")]
     dataset = load_dataset(
         args.dataset_path,
         num_proc=20,
@@ -445,13 +401,14 @@ if __name__ == "__main__":
         )
     
     print("dataset was loaded")
-    cleaned_data = dataset['train'].map(process,
+    cleaned_data = dataset.map(filter_and_process_valid_examples,
                                #num_proc=20,
                                num_proc=os.cpu_count() if args.max_workers is None else args.max_workers,
                                batched=True,
                                writer_batch_size=100000,
                                keep_in_memory=True,
-                               input_columns=args.column_name
+                               input_columns=args.column_name,
+                               remove_columns=dataset.column_names
                                )
     
     cleaned_data.save_to_disk(args.save_path)
