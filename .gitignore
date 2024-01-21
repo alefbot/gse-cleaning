@@ -166,3 +166,4 @@ data/test/
 .filebeat/*.yml
 secret.toml
 gse-text-data/*
+temp
