@@ -14,7 +14,9 @@ from itertools import groupby
 from string import punctuation
 
 import datasets
+import langdetect
 from datasets import load_dataset
+from newspaper import Article
 from patterns import Patterns
 from tokenizers import normalizers
 from tokenizers.normalizers import NFC, NFD, NFKC, NFKD
@@ -46,6 +48,18 @@ MIN_LINE_WORDS = 10
 
 
 Unicode_normalizer = normalizers.Sequence([NFD(), NFKD(), NFC(), NFKC()])        
+
+
+def extract_text(html):
+    article: Article = Article("temp.com", fetch_images=False)
+    article.download_state = 2 
+    article.download(input_html=html)
+    article.parse()
+    if len(article.text) < 1000 or langdetect.detect(article.text) != "fa":
+        return ""
+    text = re.sub(r"\n{2,}", "\n\n", article.text)
+    return text
+
 
 def fix_html(txt):
     "From fastai: 'Fix messy things we've seen in documents'"
@@ -361,16 +375,16 @@ if __name__ == "__main__":
                         )
     args = parser.parse_args()
     repetition_removal = [
-    remove_documents_by_word_length,
-    remove_documents_by_symbol_ratio,
-    remove_documents_bullet_point_ellipsis,
-    filter_documents_by_alphabetic_words,
-    filter_documents_by_line_repetition,
-    filter_documents_by_paragraph_repetition,
-    calculate_line_duplicate_char_fractions,
-    calculate_paragraph_duplicate_char_fractions,
-    calculate_top_ngram_char_fraction,
-    calculate_duplicated_ngram_char_fraction
+        remove_documents_by_word_length,
+        remove_documents_by_symbol_ratio,
+        remove_documents_bullet_point_ellipsis,
+        filter_documents_by_alphabetic_words,
+        filter_documents_by_line_repetition,
+        filter_documents_by_paragraph_repetition,
+        calculate_line_duplicate_char_fractions,
+        calculate_paragraph_duplicate_char_fractions,
+        calculate_top_ngram_char_fraction,
+        calculate_duplicated_ngram_char_fraction
     ]
     
     document_wise_filtering = [

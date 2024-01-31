@@ -1,5 +1,5 @@
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Form
 import logging
 import os
 
@@ -49,7 +49,7 @@ app = FastAPI(
 )
 
 def filter_and_process_valid_examples(examples, **kwargs):
-    
+
     filtered_texts = [
         reduce(lambda x, y: y(x), kwargs['document_wise_filtering'], example)
         for example in examples
@@ -83,19 +83,20 @@ def filter_and_process_valid_examples(examples, **kwargs):
     
 
 
-@app.get('/')
-def main(text:str,):
+@app.post('/')
+async def main(html: str = Form(...)):
+    
     repetition_removal = [
-    remove_documents_by_word_length,
-    remove_documents_by_symbol_ratio,
-    remove_documents_bullet_point_ellipsis,
-    filter_documents_by_alphabetic_words,
-    filter_documents_by_line_repetition,
-    filter_documents_by_paragraph_repetition,
-    calculate_line_duplicate_char_fractions,
-    calculate_paragraph_duplicate_char_fractions,
-    calculate_top_ngram_char_fraction,
-    calculate_duplicated_ngram_char_fraction
+        remove_documents_by_word_length,
+        remove_documents_by_symbol_ratio,
+        remove_documents_bullet_point_ellipsis,
+        filter_documents_by_alphabetic_words,
+        filter_documents_by_line_repetition,
+        filter_documents_by_paragraph_repetition,
+        calculate_line_duplicate_char_fractions,
+        calculate_paragraph_duplicate_char_fractions,
+        calculate_top_ngram_char_fraction,
+        calculate_duplicated_ngram_char_fraction
     ]
     
     document_wise_filtering = [
@@ -117,13 +118,17 @@ def main(text:str,):
         remove_read_more,
         remove_sign_in,
     ]
-    text_dict = filter_and_process_valid_examples([text],
+    html = extract_text(html)
+    if html == "":
+        return [""]
+    text_dict = filter_and_process_valid_examples([html],
                                                   repetition_removal=repetition_removal,
                                                   document_wise_filtering=document_wise_filtering,
                                                   line_wise_filtering=line_wise_filtering
-                                                    )
+                                                  )
     return text_dict['text']
 
 
 if __name__ == '__main__':
     uvicorn.run(app, host="0.0.0.0", port=PORT)
+
