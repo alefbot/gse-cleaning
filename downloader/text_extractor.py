@@ -20,8 +20,7 @@ MAX_RETRIES = 2
 NUM_PROCESSES = 20
 FILE_PATH_204 = 'gse-text-data/urls_with_204'
 MAIN_FILE_PATH = 'gse-text-data/main_files'
-# ARCHIVER_ADDRESS = os.getenv("ARCHIVER_ADDRESS")
-ARCHIVER_ADDRESS = "https://graph-api-archiver.pr.mci.dev/archiver/search"
+ARCHIVER_ADDRESS = os.getenv("ARCHIVER_ADDRESS")
 LOG_FILENAME = "file.log"
 logging.basicConfig(
     format="%(asctime)s,%(msecs)d %(levelname)s %(message)s",
